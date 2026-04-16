@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Stickman Fighter: Mobile Edition</title>
+    <style>
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; background: #1a1a1a; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; height: 100vh; color: white; font-family: sans-serif; overflow: hidden; touch-action: manipulation; }
+        
+        canvas { background: #fdfdfd; border-bottom: 5px solid #444; width: 100%; max-width: 800px; height: auto; aspect-ratio: 2/1; }
+
+        .ui { display: flex; width: 100%; max-width: 800px; justify-content: space-between; padding: 10px; z-index: 10; }
+        .health-bar { width: 120px; height: 15px; background: #444; border: 1px solid #000; border-radius: 8px; overflow: hidden; }
+        .fill { height: 100%; width: 100%; transition: width 0.1s; }
+        #pHealth { background: #222; }
+        #eHealth { background: #d63031; }
+
+        /* MOBILE CONTROLS */
+        .controls-container {
+            display: flex;
+            width: 100%;
+            max-width: 800px;
+            justify-content: space-between;
+            padding: 20px;
+            position: absolute;
+            bottom: 10px;
+        }
+
+        .d-pad, .action-buttons { display: flex; gap: 10px; }
+        
+        .btn {
+            width: 60px;
+            height: 60px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            user-select: none;
+            touch-action: none;
+        }
+        .btn:active { background: rgba(255, 255, 255, 0.5); transform: scale(0.9); }
+        .btn-wide { border-radius: 15px; width: 70px; }
+
+        @media (min-width: 800px) {
+            .controls-container { position: relative; margin-top: 20px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="ui">
+        <div>P1<div class="health-bar"><div id="pHealth" class="fill"></div></div></div>
+        <div id="statusText" style="font-size: 0.8em; color: #888;">TAP TO START SOUND</div>
+        <div>CPU<div class="health-bar"><div id="eHealth" class="fill"></div></div></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    
+    <div class="controls-container">
+        <div class="d-pad">
+            <div class="btn" id="btnLeft">←</div>
+            <div class="btn" id="btnUp">↑</div>
+            <div class="btn" id="btnRight">→</div>
+        </div>
+        <div class="action-buttons">
+            <div class="btn btn-wide" id="btnPunch">PUNCH</div>
+            <div class="btn btn-wide" id="btnKick">KICK</div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- ASSET LOADING ---
+const playerFace = new Image(); playerFace.src = 'player.png'; 
+const enemyFace = new Image(); enemyFace.src = 'enemy.png';
+const attackSounds = [new Audio('1.mp3'), new Audio('2.mp3'), new Audio('3.mp3'), new Audio('4.mp3')];
+
+const config = { gravity: 0.8, groundY: 350, speed: 6, jump: -15 };
+const keys = {};
+
+// --- TOUCH OVERRIDES ---
+const setupTouch = (id, key) => {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; if(key === 'KeyA') player.attack('punch'); if(key === 'KeyS') player.attack('kick'); });
+    el.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+};
+
+setupTouch('btnLeft', 'ArrowLeft');
+setupTouch('btnRight', 'ArrowRight');
+setupTouch('btnUp', 'ArrowUp');
+setupTouch('btnPunch', 'KeyA');
+setupTouch('btnKick', 'KeyS');
+
+// Audio Unlock for Mobile
+window.addEventListener('touchstart', () => { 
+    document.getElementById('statusText').innerText = "";
+    attackSounds.forEach(s => { s.play(); s.pause(); }); 
+}, { once: true });
+
+class Fighter {
+    constructor(x, color, faceImg, isPlayer) {
+        this.x = x; this.y = config.groundY;
+        this.color = color; this.face = faceImg;
+        this.isPlayer = isPlayer; this.hp = 100;
+        this.dx = 0; this.dy = 0;
+        this.isJumping = false; this.isAttacking = false;
+        this.attackType = ''; this.facing = isPlayer ? 1 : -1;
+        this.frame = 0; this.deathRotation = 0;
+    }
+
+    draw(isWinner) {
+        this.frame++;
+        const hSize = 110; 
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        if (this.hp <= 0) {
+            if (this.deathRotation < Math.PI / 2) this.deathRotation += 0.1;
+            ctx.rotate(this.deathRotation * this.facing * -1);
+            ctx.translate(0, 40);
+        }
+        ctx.strokeStyle = this.color; ctx.lineWidth = 6; ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(0, -50); ctx.lineTo(0, -20); // Spine
+        if (isWinner) {
+            ctx.moveTo(0, -45); ctx.lineTo(-25, -60); ctx.lineTo(-20, -80);
+            ctx.moveTo(0, -45); ctx.lineTo(25, -60); ctx.lineTo(20, -80);
+        } else if (this.isAttacking && this.attackType === 'punch') {
+            ctx.moveTo(0, -40); ctx.lineTo(50 * this.facing, -40);
+        } else {
+            ctx.moveTo(-15, -30); ctx.lineTo(0, -45); ctx.lineTo(15, -30);
+        }
+        if (isWinner) {
+            ctx.moveTo(0, -20); ctx.lineTo(-18, 0); ctx.moveTo(0, -20); ctx.lineTo(18, 0);
+        } else if (this.isAttacking && this.attackType === 'kick') {
+            ctx.moveTo(0, -20); ctx.lineTo(55 * this.facing, -30);
+        } else {
+            const legSwing = Math.sin(this.frame * 0.2) * (this.dx !== 0 ? 15 : 0);
+            ctx.moveTo(-12 + legSwing, 0); ctx.lineTo(0, -20); ctx.lineTo(12 - legSwing, 0);
+        }
+        ctx.stroke();
+        ctx.save();
+        ctx.translate(0, -100); 
+        if (this.facing === -1) ctx.scale(-1, 1);
+        ctx.drawImage(this.face, -hSize/2, -hSize/2, hSize, hSize);
+        ctx.restore();
+        ctx.restore();
+    }
+
+    update(isWinner) {
+        if (this.hp > 0 && !isWinner) {
+            this.x += this.dx; this.y += this.dy;
+            if (this.y < config.groundY) this.dy += config.gravity;
+            else { this.y = config.groundY; this.dy = 0; this.isJumping = false; }
+            if (this.x < 50) this.x = 50; if (this.x > canvas.width - 50) this.x = canvas.width - 50;
+        }
+        this.draw(isWinner);
+    }
+
+    attack(type) {
+        if (this.isAttacking || this.hp <= 0) return;
+        this.isAttacking = true; this.attackType = type;
+        if (this.isPlayer) {
+            const s = attackSounds[Math.floor(Math.random() * attackSounds.length)];
+            s.currentTime = 0; s.play().catch(e => {});
+        }
+        const target = this.isPlayer ? enemy : player;
+        const dist = Math.abs(this.x - target.x);
+        if (dist < 85 && Math.abs(this.y - target.y) < 80) {
+            target.hp -= (type === 'kick' ? 10 : 5);
+            document.getElementById(this.isPlayer ? 'eHealth' : 'pHealth').style.width = Math.max(0, target.hp) + '%';
+        }
+        setTimeout(() => { this.isAttacking = false; this.attackType = ''; }, 200);
+    }
+}
+
+const player = new Fighter(150, '#000', playerFace, true);
+const enemy = new Fighter(650, '#d63031', enemyFace, false);
+
+function handleAI() {
+    if (enemy.hp <= 0 || player.hp <= 0) return;
+    const dist = enemy.x - player.x;
+    enemy.facing = dist > 0 ? -1 : 1;
+    if (Math.abs(dist) > 70) enemy.dx = dist > 0 ? -3 : 3;
+    else { enemy.dx = 0; if (Math.random() > 0.97) enemy.attack(Math.random() > 0.5 ? 'punch' : 'kick'); }
+}
+
+function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#ddd'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(0, 352); ctx.lineTo(800, 352); ctx.stroke();
+
+    const pWins = enemy.hp <= 0;
+    const eWins = player.hp <= 0;
+
+    if (player.hp > 0 && !pWins) {
+        player.dx = 0;
+        if (keys['ArrowLeft']) { player.dx = -config.speed; player.facing = -1; }
+        if (keys['ArrowRight']) { player.dx = config.speed; player.facing = 1; }
+        if (keys['ArrowUp'] && !player.isJumping) { player.dy = config.jump; player.isJumping = true; }
+    }
+
+    handleAI();
+    player.update(pWins);
+    enemy.update(eWins);
+
+    if (!pWins && !eWins) requestAnimationFrame(animate);
+    else if (player.deathRotation < 1.5 && enemy.deathRotation < 1.5) requestAnimationFrame(animate);
+    else {
+        setTimeout(() => {
+            ctx.fillStyle = "rgba(0,0,0,0.85)"; ctx.fillRect(0,0,800,400);
+            ctx.fillStyle = "white"; ctx.font = "bold 60px Arial"; ctx.textAlign = "center";
+            ctx.fillText(pWins ? "Ni Hao Nigga" : "GAME OVER", 400, 210);
+        }, 600);
+    }
+}
+
+setTimeout(animate, 500);
+</script>
+<div style="margin-top: 20px; color: #555; font-size: 12px;">
+    Total Players: 
+    <img src="https://hitwebcounter.com/counter/counter.php?page=YOUR_UNIQUE_ID&style=0006&nbdigits=5&type=page&initCount=0" title="Free Counter" Alt="web counter" border="0" />
+</div>
+</body>
+</html>
